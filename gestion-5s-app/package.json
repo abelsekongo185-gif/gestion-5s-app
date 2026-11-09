@@ -1,0 +1,9 @@
+{
+  "name": "gestion-5s",
+  "version": "1.0.0",
+  "description": "Gestion 5S : signalement photo, alertes en direct, rappels, classement des départements",
+  "private": true,
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }
+}
