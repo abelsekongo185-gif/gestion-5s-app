@@ -1,6 +1,6 @@
 /* Service worker : coquille hors ligne et notifications */
-const CACHE = 'g5s-v1';
-const SHELL = ['/', '/shim.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png'];
+const CACHE = 'g5s-v2';
+const SHELL = ['/', '/shim.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

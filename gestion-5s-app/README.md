@@ -41,20 +41,30 @@ Définissez `VAPID_SUBJECT` avec une vraie adresse : Apple peut refuser les noti
 - **Chaque personne** : se connecte avec son nom et son code. Dans Réglages > Mon compte, elle peut activer les notifications, installer l'application et changer son code.
 - **Installation sur téléphone** : Android (Chrome), bouton « Installer sur cet appareil » ou menu du navigateur. iPhone (Safari, iOS 16.4 ou plus), bouton Partager puis « Sur l'écran d'accueil ». Sur iPhone, les notifications ne fonctionnent qu'une fois l'application ajoutée à l'écran d'accueil.
 
-## 4. Rappels et notifications
+## 4. Archives et import
+
+- **Archiver** : les actions corrigées passent dans l'onglet Archives, hors du fil d'alertes. Elles restent comptées dans le bilan. Un administrateur peut archiver une action (bouton Archiver) ou toutes les corrigées d'un coup, et restaurer une archive.
+- **Archivage automatique** : dans Réglages, choisissez le délai (30 jours par défaut, ou jamais). Il s'exécute quand un administrateur ouvre le logiciel.
+- **Recherche et export** : l'onglet Archives se filtre par texte et par département, et s'exporte en CSV (ouvrable dans Excel).
+- **Import CSV** (administrateurs) : anciennes actions, départements avec responsables, membres. Téléchargez le modèle, remplissez-le, puis choisissez le fichier : un aperçu liste les lignes valides et les erreurs avant l'import. Dans Excel : Enregistrer sous, « CSV (séparateur : point-virgule) ». Maximum 500 lignes par fichier.
+  - Anciennes actions : avec une date de correction, l'action est importée directement dans les archives ; sans date, elle reste ouverte dans le fil d'alertes. Les lignes déjà présentes sont ignorées. L'import n'envoie aucune notification.
+  - Départements et membres : un nom déjà existant est mis à jour au lieu d'être dupliqué.
+- Le logiciel charge jusqu'à 1 000 actions (les plus récentes). Au-delà, exportez les anciennes archives en CSV.
+
+## 5. Rappels et notifications
 
 - Chaque nouveau signalement envoie une notification aux autres personnes qui l'ont activée, même écran fermé.
 - Le serveur envoie les rappels aux heures réglées, à tous les appareils abonnés, s'il reste des actions non corrigées. Le serveur doit donc rester allumé.
 - Les relances par WhatsApp restent manuelles : le bouton ouvre WhatsApp avec le message prêt à envoyer.
 
-## 5. Sécurité
+## 6. Sécurité
 
 - Les codes PIN sont stockés chiffrés (scrypt). Cinq essais ratés bloquent la connexion une minute.
 - L'écran de connexion liste les noms des membres qui ont un accès. Utilisez des codes PIN que l'on ne devine pas facilement.
 - Seuls les administrateurs modifient départements, membres, réglages et suppriment des actions.
 - Les photos sont réduites avant l'envoi (environ 100 Ko chacune).
 
-## 6. Limites connues
+## 7. Limites connues
 
 - Pas de mode hors ligne pour l'envoi : un signalement nécessite une connexion au serveur.
 - Un seul serveur, sans sauvegarde automatique : pensez à copier le dossier des données régulièrement.

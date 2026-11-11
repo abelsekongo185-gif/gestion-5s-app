@@ -384,7 +384,7 @@ async function api(req, res, url) {
       const rec = { data, version: (existing ? existing.version : 0) + 1, updatedAt: Date.now() };
       putDoc(c, id, rec);
       if (!LAZY.has(c)) broadcast({ col: c, id, op: 'set', data: rec.data, version: rec.version });
-      if (c === 'reports' && !existing) {
+      if (c === 'reports' && !existing && !data.imported) {
         pushAll({ title: (data.prio === 'urgent' ? 'Alerte urgente · ' : 'Nouvelle alerte · ') + (data.deptName || ''), body: ((data.cat ? data.cat + ' : ' : '') + (data.desc || (data.photos && data.photos[0] && data.photos[0].note) || 'Voir les photos')).slice(0, 140), tag: 'rapport-' + id, urgent: data.prio === 'urgent', url: '/#alertes' }, user.id);
       }
       return send(res, 200, recOut(id, rec));

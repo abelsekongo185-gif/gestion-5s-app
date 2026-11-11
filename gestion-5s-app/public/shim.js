@@ -292,7 +292,7 @@
   function pushSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
   var account = {
     me: function () { return me; },
-    logout: function () { return api('POST', '/api/logout').catch(function () { /* ignoré */ }).then(function () { lsSet(KEY, ''); location.reload(); }); },
+    logout: function () { return api('POST', '/api/logout').catch(function () { /* ignoré */ }).then(function () { lsSet(KEY, ''); lsSet('g5s_me', ''); location.reload(); }); },
     changePin: function (oldPin, newPin) { return api('POST', '/api/pin', { old: oldPin, new: newPin }); },
     push: {
       supported: pushSupported,
@@ -332,9 +332,15 @@
   var ready = new Promise(function (resolve) {
     function start() {
       token = lsGet(KEY) || null;
-      var first = token ? api('GET', '/api/me').catch(function (e) { if (e.status === 401) { token = null; return null; } throw e; }) : Promise.resolve(null);
+      var first = token ? api('GET', '/api/me').catch(function (e) {
+        if (e.status === 401) { token = null; return null; }
+        var cached = lsGet('g5s_me');
+        if (cached) { try { offline = true; return JSON.parse(cached); } catch (x) { /* ignoré */ } }
+        throw e;
+      }) : Promise.resolve(null);
       first.then(function (m) { return m || authScreen(); }, function () { return authScreen(); }).then(function (m) {
         me = m;
+        lsSet('g5s_me', JSON.stringify(m));
         return refreshNames();
       }).then(function () { connectSSE(); resolve(); });
     }
