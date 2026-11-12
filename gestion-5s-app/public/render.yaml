@@ -1,0 +1,20 @@
+# Déploiement Render : « New + » > « Blueprint », puis choisissez ce dépôt.
+services:
+  - type: web
+    name: gestion-5s
+    runtime: node
+    plan: free            # voir le README : le plan gratuit s'endort après 15 min sans visite
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: TZ
+        value: Africa/Abidjan
+      - key: SUPABASE_URL
+        sync: false       # adresse du projet Supabase, de la forme https://xxxx.supabase.co
+      - key: SUPABASE_SECRET_KEY
+        sync: false       # clé « secret » de Supabase (jamais la clé publishable)
+      - key: VAPID_SUBJECT
+        value: mailto:admin@example.com   # remplacez par votre vraie adresse e-mail
