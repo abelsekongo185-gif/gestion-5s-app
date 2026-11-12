@@ -179,6 +179,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 .slot{border:2px dashed var(--line); border-radius:8px; aspect-ratio:4/3; width:100%; max-width:100%; display:grid; place-items:center; text-align:center; padding:8px; background:var(--bg); color:var(--muted); font-size:13px; cursor:pointer}
 .slot b{display:block; color:var(--accent); font-family:var(--font-display); font-size:18px; line-height:1.1; margin-bottom:2px}
 .rel summary{cursor:pointer; font-weight:600; min-height:44px; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.qmsg{white-space:pre-wrap; background:var(--surface2); border-radius:10px; padding:12px; font-size:15px; line-height:1.4; margin:12px 0; max-height:38vh; overflow:auto}
+.sent{color:var(--done); font-weight:600; font-size:14px}
 .rel .rrow{display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:10px 0; border-top:1px solid var(--line)}
 .rank{display:grid; grid-template-columns:40px minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px 0; border-top:1px solid var(--line)}
 .rank:first-of-type{border-top:0}
@@ -1425,27 +1427,142 @@ function openByDept(){
 function relanceText(d,list){
   var late=list.filter(isLate).length,n=list.length;
   var t="RAPPEL 5S - "+d.name+"\n"+n+" action"+(n>1?"s":"")+" non corrigée"+(n>1?"s":"")+(late?" ("+late+" en retard)":"")+" :\n";
-  list.slice(0,8).forEach(function(r){
+  list.slice(0,8).forEach(function(r,i){
     var s=r.desc||((r.photos&&r.photos[0]&&r.photos[0].note)||"Voir la photo");
-    t+="- "+(r.cat?r.cat+" : ":"")+s.slice(0,80)+" ("+ago(r.createdAt)+")\n";
+    t+=(i+1)+". "+(r.cat?r.cat+" : ":"")+s.slice(0,80)+" ("+ago(r.createdAt)+")\n";
   });
   if(n>8)t+="... et "+(n-8)+" autres\n";
   return t.trim();
 }
-function renderRelance(){
-  var box=$("#relance"),m=openByDept(),rows=[],total=0,late=0;
+function sentKey(d){return "g5s_sent_"+todayStr()+"_"+d.id}
+function sentInfo(d){try{return JSON.parse(lsGet(sentKey(d))||"null")}catch(e){return null}}
+function markSent(d,n){lsSet(sentKey(d),JSON.stringify({at:Date.now(),n:n}))}
+function hhmm(ts){var x=new Date(ts);return String(x.getHours()).padStart(2,"0")+":"+String(x.getMinutes()).padStart(2,"0")}
+function relRows(){
+  var m=openByDept(),rows=[];
   st.depts.slice().sort(function(a,b){return a.name.localeCompare(b.name,"fr")}).forEach(function(d){
-    var l=m[d.id];if(l&&l.length){total+=l.length;late+=l.filter(isLate).length;rows.push({d:d,l:l})}
+    var l=m[d.id];if(l&&l.length)rows.push({d:d,l:l});
   });
+  return rows;
+}
+function renderRelance(){
+  var box=$("#relance"),rows=relRows(),total=0,late=0;
+  rows.forEach(function(x){total+=x.l.length;late+=x.l.filter(isLate).length});
   if(!total){box.innerHTML="";return}
   var tm=reminderTimes();
+  var pending=rows.filter(function(x){return waNum(x.d.phone)&&!sentInfo(x.d)}).length;
   var h="<details class='card rel' id='rel-d' style='margin-bottom:14px'"+(st.relOpen?" open":"")+"><summary><span>Actions non corrigées : "+total+(late?" dont "+late+" en retard":"")+"</span><span class='hint'>Rappels à "+esc(tm[0])+" et "+esc(tm[1])+"</span></summary>";
+  h+="<div class='row' style='padding:10px 0'><button class='btn wa' id='q-start' type='button'"+(pending?"":" disabled")+">Envoyer les rappels à la suite"+(pending?" ("+pending+")":"")+"</button>"+(pending?"":"<span class='hint'>Tous les rappels du jour sont envoyés.</span>")+"</div>";
   rows.forEach(function(x){
-    var n=waNum(x.d.phone),lt=x.l.filter(isLate).length;
-    h+="<div class='rrow'><div class='who'><span class='nm'>"+esc(x.d.name)+"</span><span class='role'>"+x.l.length+" à corriger"+(lt?" · "+lt+" en retard":"")+"</span></div>"+
-      (n?"<a class='btn sm wa' target='_blank' rel='noopener' href='"+esc(waLink(n,relanceText(x.d,x.l)))+"'>Relancer sur WhatsApp</a>":"<span class='hint'>Numéro WhatsApp à renseigner</span>")+"</div>";
+    var n=waNum(x.d.phone),lt=x.l.filter(isLate).length,si=sentInfo(x.d);
+    h+="<div class='rrow'><div class='who'><span class='nm'>"+esc(x.d.name)+"</span><span class='role'>"+x.l.length+" à corriger"+(lt?" · "+lt+" en retard":"")+"</span>"+(si?"<span class='sent'>✓ Rappel envoyé à "+esc(hhmm(si.at))+"</span>":"")+"</div>"+
+      (n?"<a class='btn sm wa' data-wa='"+esc(x.d.id)+"' target='_blank' rel='noopener' href='"+esc(waLink(n,relanceText(x.d,x.l)))+"'>"+(si?"Renvoyer":"Envoyer le rappel")+"</a>"+"<button class='btn sm' data-q='"+esc(x.d.id)+"' type='button'>Avec photos</button>":"<span class='hint'>Numéro WhatsApp à renseigner</span>")+"</div>";
   });
   box.innerHTML=h+"</details>";
+}
+$("#relance").addEventListener("click",function(e){
+  var a=e.target.closest?e.target.closest("[data-wa]"):null;
+  if(a){var d=deptById(a.getAttribute("data-wa")),l=openByDept()[a.getAttribute("data-wa")]||[];if(d){markSent(d,l.length);setTimeout(renderRelance,300)}return}
+  var one=e.target.closest?e.target.closest("[data-q]"):null;
+  if(one){var id=one.getAttribute("data-q"),dd=deptById(id),ll=openByDept()[id]||[];if(dd&&ll.length){st.queue={items:[{d:dd,l:ll}],i:0,sent:0,skipped:0};queueView()}return}
+  var b=e.target.closest?e.target.closest("#q-start"):null;
+  if(b&&!b.disabled)startQueue();
+});
+function startQueue(){
+  var items=relRows().filter(function(x){return waNum(x.d.phone)&&!sentInfo(x.d)});
+  if(!items.length){toast({title:"Rien à envoyer",text:"Tous les rappels du jour sont déjà envoyés."});return}
+  st.queue={items:items,i:0,sent:0,skipped:0};queueView();
+}
+function loadImg(src){return new Promise(function(ok,no){var i=new Image();i.onload=function(){ok(i)};i.onerror=no;i.src=src})}
+function wrapLines(ctx,text,maxW){
+  var words=text.split(/\s+/),lines=[],cur="";
+  words.forEach(function(w){var t=cur?cur+" "+w:w;if(ctx.measureText(t).width>maxW&&cur){lines.push(cur);cur=w}else cur=t});
+  if(cur)lines.push(cur);return lines;
+}
+/* Image d'une action : la photo « avant » avec un bandeau (numéro, catégorie, description, ancienneté). */
+async function actionImage(r,n,d){
+  var ph=(r.photos||[])[0];if(!ph)return null;
+  var src="";
+  try{var snap=await db.doc("photos/"+r.id+"_0").get();if(snap.exists)src=safeImg((snap.data()||{}).src)}catch(e){}
+  if(!src)src=safeImg(ph.thumb);
+  if(!src)return null;
+  var img=await loadImg(src),iw=img.naturalWidth||800,ih=img.naturalHeight||600;
+  var W=Math.min(1080,iw),H=Math.round(ih*W/iw),fs=Math.max(16,Math.round(W/28));
+  var c=document.createElement("canvas");c.width=W;c.height=H;
+  var ctx=c.getContext("2d");ctx.font="600 "+fs+"px sans-serif";
+  var txt=n+". "+(r.cat?r.cat+" : ":"")+(r.desc||ph.note||"")+" ("+ago(r.createdAt)+")"+(isLate(r)?" · EN RETARD":"");
+  var lines=[("RAPPEL 5S · "+d.name).toUpperCase()].concat(wrapLines(ctx,txt,W-fs*1.4).slice(0,4));
+  var bar=Math.round(lines.length*fs*1.35+fs*0.9);
+  c.height=H+bar;ctx=c.getContext("2d");
+  ctx.drawImage(img,0,0,W,H);
+  ctx.fillStyle="#14202B";ctx.fillRect(0,H,W,bar);
+  ctx.fillStyle="#F2B705";ctx.font="700 "+Math.round(fs*0.8)+"px sans-serif";ctx.fillText(lines[0],fs*0.7,H+fs*1.25);
+  ctx.fillStyle="#FFFFFF";ctx.font="600 "+fs+"px sans-serif";
+  for(var i=1;i<lines.length;i++)ctx.fillText(lines[i],fs*0.7,H+fs*1.25+i*fs*1.35);
+  var blob=await new Promise(function(ok){c.toBlob(ok,"image/jpeg",0.82)});
+  if(!blob)return null;
+  return new File([blob],"rappel-5s-"+n+".jpg",{type:"image/jpeg"});
+}
+async function prepFiles(d,list){
+  var out=[],items=list.filter(function(r){return r.photos&&r.photos.length}).slice(0,8);
+  var all=list.slice(0,8);
+  for(var i=0;i<all.length;i++){
+    var r=all[i];if(!(r.photos&&r.photos.length))continue;
+    try{var f=await actionImage(r,i+1,d);if(f)out.push(f)}catch(e){}
+  }
+  return out;
+}
+function queueView(){
+  var q=st.queue;if(!q)return;
+  if(q.i>=q.items.length){
+    openSheet("<h2>Rappels terminés</h2><p>"+q.sent+" envoyé"+(q.sent>1?"s":"")+(q.skipped?", "+q.skipped+" passé"+(q.skipped>1?"s":""):"")+".</p><div class='row'><button class='btn' id='q-end' type='button'>Fermer</button></div>",function(b){
+      b.querySelector("#q-end").onclick=function(){st.queue=null;closeSheet();renderRelance()};
+    });
+    return;
+  }
+  var it=q.items[q.i],d=it.d,n=waNum(d.phone),txt=relanceText(d,it.l);
+  var withPh=it.l.slice(0,8).filter(function(r){return r.photos&&r.photos.length}).length;
+  openSheet("<h2>Rappel "+(q.i+1)+" sur "+q.items.length+"</h2>"+
+    "<div class='who'><span class='nm'>"+esc(d.name)+"</span><span class='role'>"+esc(d.leader||"Responsable")+" · "+esc(fmtNum(n))+"</span></div>"+
+    "<div class='qmsg'>"+esc(txt)+"</div>"+
+    "<div class='row'>"+(withPh?"<button class='btn wa' id='q-share' type='button' disabled>Préparation des photos…</button>":"")+
+    "<a class='btn"+(withPh?"":" wa")+"' id='q-send' target='_blank' rel='noopener' href='"+esc(waLink(n,txt))+"'>"+(withPh?"Texte seul sur WhatsApp":"Valider et ouvrir WhatsApp")+"</a>"+
+    "<button class='btn' id='q-skip' type='button'>Passer</button><button class='btn' id='q-stop' type='button'>Arrêter</button></div>"+
+    "<p class='hint' id='q-hint' style='margin-top:10px'>"+(withPh?"Chaque action est envoyée avec sa photo et son commentaire.":"WhatsApp s'ouvre avec le message prêt. Appuyez sur Envoyer, puis revenez ici.")+"</p>",function(b){
+      b.querySelector("#q-send").addEventListener("click",function(){markSent(d,it.l.length);q.sent++;q.i++;setTimeout(queueView,500)});
+      b.querySelector("#q-skip").onclick=function(){q.skipped++;q.i++;queueView()};
+      b.querySelector("#q-stop").onclick=function(){st.queue=null;closeSheet();renderRelance()};
+      if(!withPh)return;
+      var btn=b.querySelector("#q-share"),hint=b.querySelector("#q-hint");
+      prepFiles(d,it.l).then(function(files){
+        if(st.queue!==q||q.items[q.i]!==it)return;
+        if(!files.length){btn.textContent="Photos indisponibles";return}
+        var canShare=false;try{canShare=!!(navigator.canShare&&navigator.canShare({files:files}))}catch(e){}
+        btn.disabled=false;
+        if(canShare){
+          btn.textContent="Envoyer avec les photos ("+files.length+")";
+          hint.textContent="Dans la liste qui s'ouvre, choisissez WhatsApp puis "+(d.leader||"le responsable")+". Les photos et le texte sont prêts.";
+          btn.onclick=async function(){
+            btn.disabled=true;
+            try{
+              await navigator.share({files:files,text:txt,title:"Rappel 5S · "+d.name});
+              markSent(d,it.l.length);q.sent++;q.i++;queueView();
+            }catch(e){
+              btn.disabled=false;
+              if(!e||e.name!=="AbortError")toast({title:"Partage impossible",text:"Utilisez « Texte seul » ou téléchargez les photos.",sticky:true});
+            }
+          };
+        }else{
+          btn.textContent="Télécharger les photos ("+files.length+")";
+          hint.textContent="Sur ordinateur, WhatsApp ne reçoit pas les images automatiquement : téléchargez-les, ouvrez « Texte seul sur WhatsApp », puis joignez les images dans la conversation.";
+          btn.onclick=function(){
+            files.forEach(function(f,i){setTimeout(function(){
+              var u=URL.createObjectURL(f),a=document.createElement("a");a.href=u;a.download=f.name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},4000);
+            },i*400)});
+          };
+        }
+      },function(){btn.textContent="Photos indisponibles"});
+    });
 }
 $("#relance").addEventListener("toggle",function(e){if(e.target&&e.target.id==="rel-d")st.relOpen=e.target.open},true);
 function checkReminders(){
