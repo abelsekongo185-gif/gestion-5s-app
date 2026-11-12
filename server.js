@@ -59,7 +59,7 @@ class SupabaseStore {
     if (!/^https?:\/\//.test(SUPABASE_URL)) throw new Error("SUPABASE_URL doit commencer par https:// (exemple : https://abcdxyz.supabase.co).");
     try { await this.req('GET', '/docs?select=id&limit=1'); }
     catch (e) {
-      if (e.status === 404 || e.code === 'PGRST205' || e.code === '42P01') throw new Error("Les tables n'existent pas. Exécutez le script supabase-setup.sql dans Supabase (SQL Editor).");
+            if (e.status === 404 || e.code === 'PGRST205' || e.code === '42P01') throw new Error("Tables introuvables. Supabase répond : HTTP " + e.status + ", code " + e.code + ", " + e.message + " ; projet : " + SUPABASE_URL.replace(/^https?:\/\//, '').split('.')[0]);
       if (e.status === 401 || e.status === 403) throw new Error("Clé refusée par Supabase. Vérifiez SUPABASE_SECRET_KEY : il faut la clé « secret » (sb_secret_...) ou l'ancienne clé service_role.");
       throw e;
     }
