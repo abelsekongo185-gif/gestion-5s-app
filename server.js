@@ -59,8 +59,10 @@ class SupabaseStore {
     if (!/^https?:\/\//.test(SUPABASE_URL)) throw new Error("SUPABASE_URL doit commencer par https:// (exemple : https://abcdxyz.supabase.co).");
     try { await this.req('GET', '/docs?select=id&limit=1'); }
     catch (e) {
-            if (e.status === 404 || e.code === 'PGRST205' || e.code === '42P01') throw new Error("Tables introuvables. Supabase répond : HTTP " + e.status + ", code " + e.code + ", " + e.message + " ; projet : " + SUPABASE_URL.replace(/^https?:\/\//, '').split('.')[0]);
-      if (e.status === 401 || e.status === 403) throw new Error("Clé refusée par Supabase. Vérifiez SUPABASE_SECRET_KEY : il faut la clé « secret » (sb_secret_...) ou l'ancienne clé service_role.");
+      const detail = ' [Supabase répond : HTTP ' + e.status + (e.code ? ', code ' + e.code : '') + ', « ' + e.message + ' » ; projet : ' + (SUPABASE_URL.replace(/^https?:\/\//, '').split('.')[0]) + ']';
+      if (e.status === 404 || e.code === 'PGRST205' || e.code === '42P01') throw new Error("Les tables docs et meta ne sont pas trouvées dans ce projet. Vérifiez que SUPABASE_URL est celle du projet où vous avez exécuté le script SQL, puis que l'API Data est active." + detail);
+      if (e.status === 401 || e.status === 403) throw new Error("Clé refusée par Supabase. Vérifiez SUPABASE_SECRET_KEY : il faut la clé « secret » (sb_secret_...) ou l'ancienne clé service_role." + detail);
+      e.message += detail;
       throw e;
     }
     try { await this.req('POST', '/meta?on_conflict=id', { id: 'ping', value: { t: Date.now() } }, { Prefer: 'resolution=merge-duplicates,return=minimal' }); }
@@ -430,6 +432,11 @@ async function api(req, res, url) {
   if (!user) throw new HttpError(401, 'Connexion requise.');
 
   if (p === '/api/me' && m === 'GET') return send(res, 200, { id: user.id, name: user.name, admin: user.admin });
+  if (p === '/api/relance-link' && m === 'GET') {
+    const d = url.searchParams.get('dept') || '';
+    if (!ID_RE.test(d) || !mem.departments.has(d)) throw new HttpError(404, 'Département inconnu.');
+    return send(res, 200, { path: '/r/' + d + '/' + linkSig(d) });
+  }
   if (p === '/api/logout' && m === 'POST') { delete auth.sessions[user.key]; saveAuth(); return send(res, 200, { ok: true }); }
   if (p === '/api/pin' && m === 'POST') {
     const b = await readJson(req);
@@ -526,10 +533,77 @@ async function api(req, res, url) {
   throw new HttpError(404, 'Introuvable.');
 }
 
+/* ---------- Liens de rappel par département : page en lecture seule, sans connexion ---------- */
+function ensureLinkKey() { if (!auth.linkKey) { auth.linkKey = crypto.randomBytes(32).toString('hex'); saveAuth(); } }
+function linkSig(dept) { return crypto.createHmac('sha256', auth.linkKey).update('relance:' + dept).digest('base64url').slice(0, 24); }
+function linkOk(dept, sig) {
+  if (!ID_RE.test(dept) || typeof sig !== 'string') return false;
+  const a = Buffer.from(linkSig(dept)), b = Buffer.from(sig);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+const hesc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function agoFr(ts) {
+  const m = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (m < 1) return "à l'instant";
+  if (m < 60) return 'il y a ' + m + ' min';
+  const h = Math.round(m / 60);
+  return h < 48 ? 'il y a ' + h + ' h' : 'il y a ' + Math.round(h / 24) + ' j';
+}
+function todayIso() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function relancePage(dept, sig) {
+  const d = mem.departments.get(dept);
+  if (!d) throw new HttpError(404, 'Introuvable.');
+  const co = mem.settings.get('company');
+  const company = (co && co.data && co.data.name) || '';
+  const list = [...mem.reports.entries()]
+    .filter(([, r]) => r.data.dept === dept && (r.data.status || 'open') !== 'done' && !r.data.archived)
+    .sort((a, b) => (b[1].data.createdAt || 0) - (a[1].data.createdAt || 0));
+  const today = todayIso();
+  let h = '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Rappel 5S - ' + hesc(d.data.name) + '</title>' +
+    '<style>body{margin:0;font:16px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#EDF0F3;color:#14202B}header{background:#14202B;color:#fff;padding:16px}header b{color:#F2B705;letter-spacing:.06em;font-size:13px}h1{margin:4px 0 0;font-size:24px}main{padding:12px;max-width:720px;margin:auto}' +
+    '.c{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;border-left:5px solid #BE2F1B}.late{color:#BE2F1B;font-weight:700}.m{color:#586674;font-size:14px}img{width:100%;height:auto;border-radius:8px;margin-top:8px;display:block}.n{font-size:14px;color:#586674;margin:2px 0 0}</style></head><body>' +
+    '<header><b>RAPPEL 5S' + (company ? ' · ' + hesc(company).toUpperCase() : '') + '</b><h1>' + hesc(d.data.name) + '</h1><div class="m" style="color:#cfd6dd">' + list.length + ' action' + (list.length > 1 ? 's' : '') + ' non corrigée' + (list.length > 1 ? 's' : '') + ' · mis à jour ' + hesc(new Date().toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })) + '</div></header><main>';
+  if (!list.length) h += '<div class="c" style="border-color:#1B7443">Aucune action en attente. Merci !</div>';
+  list.forEach(([id, r], i) => {
+    const x = r.data, late = x.due && x.due < today;
+    h += '<div class="c"><div><b>' + (i + 1) + '. ' + hesc(x.cat ? x.cat + ' : ' : '') + hesc(x.desc || 'Voir la photo') + '</b></div>' +
+      '<div class="m">' + hesc(agoFr(x.createdAt || Date.now())) + (x.due ? ' · à corriger avant le ' + hesc(x.due) : '') + (late ? ' · <span class="late">EN RETARD</span>' : '') + '</div>';
+    (x.photos || []).slice(0, 4).forEach((ph, k) => {
+      h += '<img loading="lazy" alt="Photo ' + (k + 1) + '" src="/r/' + hesc(dept) + '/' + hesc(sig) + '/p/' + hesc(id) + '/' + k + '">' + (ph && ph.note ? '<p class="n">' + hesc(ph.note) + '</p>' : '');
+    });
+    h += '</div>';
+  });
+  return h + '</main></body></html>';
+}
+async function serveRelance(req, res, parts) {
+  const [dept, sig, kind, id, idx] = parts;
+  if (!linkOk(dept, sig)) throw new HttpError(404, 'Lien invalide.');
+  const sec = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' };
+  if (!kind) {
+    res.writeHead(200, Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'" }, sec));
+    return res.end(relancePage(dept, sig));
+  }
+  if (kind !== 'p' || !ID_RE.test(id || '') || !/^\d$/.test(idx || '')) throw new HttpError(404, 'Introuvable.');
+  const rep = mem.reports.get(id);
+  const k = Number(idx);
+  if (!rep || rep.data.dept !== dept || !(rep.data.photos || [])[k]) throw new HttpError(404, 'Introuvable.');
+  let src = '';
+  try { const ph = await getDoc('photos', id + '_' + k); src = ph && ph.data && ph.data.src; } catch (e) { /* repli sur la miniature */ }
+  if (typeof src !== 'string' || !/^data:image\//.test(src)) src = rep.data.photos[k].thumb;
+  const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(src || '');
+  if (!m) throw new HttpError(404, 'Introuvable.');
+  res.writeHead(200, Object.assign({ 'Content-Type': 'image/' + m[1], 'Cache-Control': 'private, max-age=3600' }, sec));
+  return res.end(Buffer.from(m[2], 'base64'));
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
+    if (url.pathname.startsWith('/r/')) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
+      return await serveRelance(req, res, url.pathname.split('/').slice(2));
+    }
     if (url.pathname.startsWith('/api/')) return await api(req, res, url);
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
     serveStatic(req, res, decodeURIComponent(url.pathname));
@@ -566,6 +640,7 @@ async function main() {
   const saved = await store.loadAuth();
   if (saved) auth = Object.assign(auth, saved);
   ensureVapid();
+  ensureLinkKey();
   await flushAuth();
   server.listen(PORT, () => {
     console.log('Gestion 5S en marche sur le port ' + PORT);
