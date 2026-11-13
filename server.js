@@ -187,7 +187,7 @@ function flushAuth() {
 function hashPin(pin, salt) { return crypto.scryptSync(pin, salt, 32).toString('hex'); }
 function setUserPin(id, pin) {
   const salt = crypto.randomBytes(16).toString('hex');
-  auth.users[id] = { salt, hash: hashPin(pin, salt) };
+  auth.users[id] = { salt, hash: hashPin(pin, salt), lastLogin: (auth.users[id] && auth.users[id].lastLogin) || 0 };
   saveAuth();
 }
 function checkPin(id, pin) {
@@ -362,7 +362,26 @@ function serveStatic(req, res, pathname) {
 function recOut(id, rec) { return { id, data: rec.data, version: rec.version }; }
 
 /* ---------- Membres : codes PIN et accès ---------- */
+async function patchMember(id, patch) {
+  const rec = await withLock('members/' + id, async () => {
+    const ex = await getDoc('members', id);
+    if (!ex) throw new HttpError(404, 'Membre introuvable.');
+    const r = { data: Object.assign({}, ex.data, patch, { updatedAt: Date.now() }), version: ex.version + 1, updatedAt: Date.now() };
+    await putDoc('members', id, r);
+    return r;
+  });
+  broadcast({ col: 'members', id, op: 'set', data: rec.data, version: rec.version });
+}
+function adminCount() {
+  let n = 0;
+  for (const [id, rec] of mem.members) if (rec.data.admin === true && auth.users[id]) n++;
+  return n;
+}
 function processMember(id, data) {
+  if (data.admin !== undefined && data.admin !== true) {
+    const cur = mem.members.get(id);
+    if (cur && cur.data.admin === true && auth.users[id] && adminCount() <= 1) throw new HttpError(400, 'Il doit rester au moins un responsable (administrateur).');
+  }
   if (data.pin !== undefined) {
     const pin = String(data.pin).trim();
     delete data.pin;
@@ -395,7 +414,7 @@ async function api(req, res, url) {
     const names = [];
     for (const [id, rec] of mem.members) if (auth.users[id]) names.push(String(rec.data.name || ''));
     const set = mem.settings.get('company');
-    return send(res, 200, { needsSetup: Object.keys(auth.users).length === 0, users: names.sort((a, b) => a.localeCompare(b, 'fr')), company: (set && set.data.name) || '' });
+    return send(res, 200, { needsSetup: Object.keys(auth.users).length === 0, hideNames: !!auth.hideNames, users: auth.hideNames ? [] : names.sort((a, b) => a.localeCompare(b, 'fr')), company: (set && set.data.name) || '' });
   }
   if (p === '/api/setup' && m === 'POST') {
     if (Object.keys(auth.users).length) throw new HttpError(403, 'Le logiciel est déjà configuré.');
@@ -418,6 +437,7 @@ async function api(req, res, url) {
     const found = memberByName(b.name);
     if (!found || !checkPin(found.id, b.pin)) { noteFail(key); throw new HttpError(400, 'Nom ou code incorrect.'); }
     fails.delete(key);
+    auth.users[found.id].lastLogin = Date.now();
     const token = newSession(found.id);
     return send(res, 200, { token, me: { id: found.id, name: String(found.rec.data.name), admin: found.rec.data.admin === true } });
   }
@@ -432,6 +452,55 @@ async function api(req, res, url) {
   if (!user) throw new HttpError(401, 'Connexion requise.');
 
   if (p === '/api/me' && m === 'GET') return send(res, 200, { id: user.id, name: user.name, admin: user.admin });
+  if (p === '/api/access' && (m === 'GET' || m === 'POST')) {
+    if (!user.admin) throw new HttpError(403, 'Réservé au responsable des 5S.');
+    if (m === 'GET') {
+      const list = [];
+      for (const [id, rec] of mem.members) {
+        list.push({ id, name: String(rec.data.name || ''), dept: rec.data.dept || '', role: rec.data.role || '', admin: rec.data.admin === true, hasAccess: !!auth.users[id], lastLogin: (auth.users[id] && auth.users[id].lastLogin) || 0, self: id === user.id });
+      }
+      list.sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+      return send(res, 200, { members: list, hideNames: !!auth.hideNames });
+    }
+    const b = await readJson(req);
+    const action = String(b.action || '');
+    if (action === 'hide-names') { auth.hideNames = b.value === true; saveAuth(); return send(res, 200, { ok: true, hideNames: auth.hideNames }); }
+    const id = String(b.id || '');
+    if (!ID_RE.test(id) || !mem.members.has(id)) throw new HttpError(404, 'Membre introuvable.');
+    const mrec = mem.members.get(id);
+    const isAdminWithAccess = mrec.data.admin === true && !!auth.users[id];
+    if (action === 'grant' || action === 'reset') {
+      const pin = String(b.pin || '').trim();
+      if (!/^\d{4,8}$/.test(pin)) throw new HttpError(400, 'Le code PIN doit comporter de 4 à 8 chiffres.');
+      const name = String(mrec.data.name || '').trim().toLowerCase();
+      for (const [oid, rec] of mem.members) {
+        if (oid !== id && auth.users[oid] && String(rec.data.name || '').trim().toLowerCase() === name) throw new HttpError(400, 'Un autre membre avec accès porte déjà ce nom.');
+      }
+      const had = !!auth.users[id];
+      setUserPin(id, pin);
+      if (had) for (const t of Object.keys(auth.sessions)) if (auth.sessions[t].uid === id && t !== user.key) delete auth.sessions[t];
+      await patchMember(id, { hasPin: true });
+      return send(res, 200, { ok: true });
+    }
+    if (action === 'revoke') {
+      if (id === user.id) throw new HttpError(400, 'Vous ne pouvez pas retirer votre propre accès.');
+      if (isAdminWithAccess && adminCount() <= 1) throw new HttpError(400, 'Il doit rester au moins un responsable.');
+      removeUser(id);
+      await patchMember(id, { hasPin: false, admin: false });
+      return send(res, 200, { ok: true });
+    }
+    if (action === 'promote') {
+      if (!auth.users[id]) throw new HttpError(400, "Donnez d'abord un accès à cette personne.");
+      await patchMember(id, { admin: true });
+      return send(res, 200, { ok: true });
+    }
+    if (action === 'demote') {
+      if (isAdminWithAccess && adminCount() <= 1) throw new HttpError(400, 'Il doit rester au moins un responsable.');
+      await patchMember(id, { admin: false });
+      return send(res, 200, { ok: true });
+    }
+    throw new HttpError(400, 'Action inconnue.');
+  }
   if (p === '/api/relance-link' && m === 'GET') {
     const d = url.searchParams.get('dept') || '';
     if (!ID_RE.test(d) || !mem.departments.has(d)) throw new HttpError(404, 'Département inconnu.');
