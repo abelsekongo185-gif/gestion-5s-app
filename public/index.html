@@ -1684,8 +1684,9 @@ function renderSettings(){
     "<div class='hint'>Les actions corrigées passent dans l'onglet Archives après ce délai. L'archivage se fait quand un administrateur ouvre le logiciel.</div>"+
     "<div class='field'><label for='s-aa'>Archiver après</label><select id='s-aa'>"+[[0,"Jamais (archivage manuel)"],[7,"7 jours"],[15,"15 jours"],[30,"30 jours"],[60,"60 jours"],[90,"90 jours"]].map(function(o){return "<option value='"+o[0]+"'"+(autoArchiveDays()===o[0]?" selected":"")+">"+o[1]+"</option>"}).join("")+"</select></div></div>"+
     "<div class='banner err' id='s-err' hidden></div>"+
-    "<div class='row'><button class='btn primary' id='s-ok' type='button'>Enregistrer les réglages</button></div>";
-  logoPreview();phoneHint($("#s-mt"),$("#s-mh"));
+    "<div class='row'><button class='btn primary' id='s-ok' type='button'>Enregistrer les réglages</button></div>"+
+    "<div class='card stack' id='acces'><h3 style='font-size:22px'>Accès au logiciel</h3><div class='hint'>Chargement…</div></div>";
+  logoPreview();phoneHint($("#s-mt"),$("#s-mh"));loadAccess();
   $$("#reglages input").forEach(function(i){i.addEventListener("input",function(){st.setDirty=true})});
   $("#s-file").addEventListener("change",async function(){
     var f=this.files&&this.files[0];if(!f)return;
@@ -1707,6 +1708,61 @@ function renderSettings(){
     }
     this.disabled=false;
   };
+}
+
+/* ---------- Accès au logiciel (responsable des 5S) ---------- */
+async function accessApi(method,body){
+  var tk=lsGet("g5s_token");
+  var r=await fetch("/api/access",{method:method,headers:{Authorization:"Bearer "+tk,"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});
+  var j={};try{j=await r.json()}catch(e){}
+  if(!r.ok)throw new Error(j.error||j.message||"Action refusée.");
+  return j;
+}
+function lastSeen(t){return t?ago(t):"jamais connecté"}
+async function loadAccess(){
+  var box=$("#acces");if(!box)return;
+  var d;
+  try{d=await accessApi("GET")}catch(e){box=$("#acces");if(!box)return;box.innerHTML="<h3 style='font-size:22px'>Accès au logiciel</h3><div class='hint'>"+esc(e.message)+"</div>";return}
+  box=$("#acces");if(!box)return;
+  var rows=d.members.map(function(m){
+    var badge=m.admin?"<span class='pill' style='background:#e6eefc;color:#1c3d8f'>Responsable 5S</span>":(m.hasAccess?"<span class='pill' style='background:#e3f4e6;color:#1d6b2b'>Accès actif</span>":"<span class='pill' style='background:#eee;color:#555'>Sans accès</span>");
+    var btns=[];
+    if(!m.hasAccess)btns.push("<button class='btn sm primary' data-ac='grant' data-id='"+esc(m.id)+"'>Donner l'accès</button>");
+    else{
+      btns.push("<button class='btn sm' data-ac='reset' data-id='"+esc(m.id)+"'>Nouveau code PIN</button>");
+      if(m.admin&&!m.self)btns.push("<button class='btn sm' data-ac='demote' data-id='"+esc(m.id)+"'>Retirer responsable</button>");
+      if(!m.admin)btns.push("<button class='btn sm' data-ac='promote' data-id='"+esc(m.id)+"'>Nommer responsable</button>");
+      if(!m.self)btns.push("<button class='btn sm' data-ac='revoke' data-id='"+esc(m.id)+"'>Retirer l'accès</button>");
+    }
+    return "<div class='stack' style='border-top:1px solid var(--line,#ddd);padding-top:10px'><div class='row'><div class='who'><span class='nm'>"+esc(m.name)+(m.self?" (vous)":"")+"</span><div class='hint'>"+(m.hasAccess?(m.lastLogin?"Dernière connexion : "+esc(lastSeen(m.lastLogin)):"Pas encore connecté"):"Ne peut pas se connecter")+"</div></div>"+badge+"</div><div class='row' style='flex-wrap:wrap;gap:8px'>"+btns.join("")+"</div></div>";
+  }).join("");
+  box.innerHTML="<h3 style='font-size:22px'>Accès au logiciel</h3>"+
+    "<div class='hint'>Seules les personnes ayant un accès peuvent se connecter. Vous créez ou changez leur code PIN et le leur communiquez. Ajoutez d'abord la personne dans l'onglet Équipes.</div>"+
+    (rows||"<div class='hint'>Aucun membre pour l'instant.</div>")+
+    "<label class='row' style='gap:10px;border-top:1px solid var(--line,#ddd);padding-top:10px'><input type='checkbox' id='ac-hide'"+(d.hideNames?" checked":"")+"><span>Masquer la liste des noms sur l'écran de connexion (chacun tape son nom)</span></label>"+
+    "<div class='banner err' id='ac-err' hidden></div>";
+  box.querySelector("#ac-hide").onchange=async function(){try{await accessApi("POST",{action:"hide-names",value:this.checked});toast({title:"Enregistré",text:this.checked?"La liste des noms est masquée.":"La liste des noms est affichée."})}catch(e){this.checked=!this.checked}};
+  [].forEach.call(box.querySelectorAll("[data-ac]"),function(b){b.onclick=function(){accessAct(b.dataset.ac,b.dataset.id,d.members)}});
+}
+function accessAct(act,id,list){
+  var m=list.filter(function(x){return x.id===id})[0];if(!m)return;
+  function run(extra){
+    var err=$("#ac-err");if(err)err.hidden=true;
+    return accessApi("POST",Object.assign({action:act,id:id},extra||{})).then(function(){closeSheet();loadAccess();toast({title:"Accès mis à jour",text:m.name})}).catch(function(e){
+      var s=$("#ac-sheet-err");if(s){s.textContent=e.message;s.hidden=false}else if(err){err.textContent=e.message;err.hidden=false}
+    });
+  }
+  if(act==="grant"||act==="reset"){
+    openSheet("<h2>"+(act==="grant"?"Donner l'accès":"Nouveau code PIN")+"</h2><p class='hint'>"+esc(m.name)+(act==="reset"?" — ses sessions ouvertes seront fermées.":"")+"</p><div class='field'><label for='acx-pin'>Code PIN (4 à 8 chiffres)</label><input type='text' id='acx-pin' inputmode='numeric' maxlength='8' autocomplete='off'></div><div class='banner err' id='ac-sheet-err' hidden></div><div class='row'><button class='btn primary' id='acx-go' type='button'>Enregistrer</button><button class='btn' id='acx-no' type='button'>Annuler</button></div>",function(){
+      $("#acx-no").onclick=closeSheet;
+      $("#acx-go").onclick=function(){var p=$("#acx-pin").value.trim();if(!/^\d{4,8}$/.test(p)){var e=$("#ac-sheet-err");e.textContent="Le code doit comporter de 4 à 8 chiffres.";e.hidden=false;return}this.disabled=true;run({pin:p}).then(function(){var g=$("#acx-go");if(g)g.disabled=false})};
+    });
+  }else{
+    var txt={revoke:"Retirer l'accès à "+m.name+" ? Cette personne ne pourra plus se connecter.",promote:"Nommer "+m.name+" responsable 5S ? Elle pourra gérer les accès et les réglages.",demote:"Retirer à "+m.name+" le rôle de responsable 5S ?"}[act];
+    openSheet("<h2>Confirmation</h2><p>"+esc(txt)+"</p><div class='banner err' id='ac-sheet-err' hidden></div><div class='row'><button class='btn primary' id='acx-go' type='button'>Confirmer</button><button class='btn' id='acx-no' type='button'>Annuler</button></div>",function(){
+      $("#acx-no").onclick=closeSheet;$("#acx-go").onclick=function(){run()};
+    });
+  }
 }
 $("#v-reglages").addEventListener("click",function(e){var c=e.target.closest("[data-copy]");if(c)copyText(c.dataset.copy)});
 
