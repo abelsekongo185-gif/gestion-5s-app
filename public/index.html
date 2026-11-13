@@ -1456,13 +1456,11 @@ function renderRelance(){
   rows.forEach(function(x){
     var n=waNum(x.d.phone),lt=x.l.filter(isLate).length,si=sentInfo(x.d);
     h+="<div class='rrow'><div class='who'><span class='nm'>"+esc(x.d.name)+"</span><span class='role'>"+x.l.length+" à corriger"+(lt?" · "+lt+" en retard":"")+"</span>"+(si?"<span class='sent'>✓ Rappel envoyé à "+esc(hhmm(si.at))+"</span>":"")+"</div>"+
-      (n?"<a class='btn sm wa' data-wa='"+esc(x.d.id)+"' target='_blank' rel='noopener' href='"+esc(waLink(n,relanceText(x.d,x.l)))+"'>"+(si?"Renvoyer":"Envoyer le rappel")+"</a>"+"<button class='btn sm' data-q='"+esc(x.d.id)+"' type='button'>Avec photos</button>":"<span class='hint'>Numéro WhatsApp à renseigner</span>")+"</div>";
+      (n?"<button class='btn sm wa' data-q='"+esc(x.d.id)+"' type='button'>"+(si?"Renvoyer le rappel":"Envoyer le rappel")+"</button>":"<span class='hint'>Numéro WhatsApp à renseigner</span>")+"</div>";
   });
   box.innerHTML=h+"</details>";
 }
 $("#relance").addEventListener("click",function(e){
-  var a=e.target.closest?e.target.closest("[data-wa]"):null;
-  if(a){var d=deptById(a.getAttribute("data-wa")),l=openByDept()[a.getAttribute("data-wa")]||[];if(d){markSent(d,l.length);setTimeout(renderRelance,300)}return}
   var one=e.target.closest?e.target.closest("[data-q]"):null;
   if(one){var id=one.getAttribute("data-q"),dd=deptById(id),ll=openByDept()[id]||[];if(dd&&ll.length){st.queue={items:[{d:dd,l:ll}],i:0,sent:0,skipped:0};queueView()}return}
   var b=e.target.closest?e.target.closest("#q-start"):null;
@@ -1472,6 +1470,14 @@ function startQueue(){
   var items=relRows().filter(function(x){return waNum(x.d.phone)&&!sentInfo(x.d)});
   if(!items.length){toast({title:"Rien à envoyer",text:"Tous les rappels du jour sont déjà envoyés."});return}
   st.queue={items:items,i:0,sent:0,skipped:0};queueView();
+}
+async function relanceLink(d){
+  try{
+    var tk=lsGet("g5s_token");if(!tk)return "";
+    var r=await fetch("/api/relance-link?dept="+encodeURIComponent(d.id),{headers:{Authorization:"Bearer "+tk}});
+    if(!r.ok)return "";
+    var j=await r.json();return j&&j.path?location.origin+j.path:"";
+  }catch(e){return ""}
 }
 function loadImg(src){return new Promise(function(ok,no){var i=new Image();i.onload=function(){ok(i)};i.onerror=no;i.src=src})}
 function wrapLines(ctx,text,maxW){
@@ -1523,15 +1529,22 @@ function queueView(){
   var it=q.items[q.i],d=it.d,n=waNum(d.phone),txt=relanceText(d,it.l);
   var withPh=it.l.slice(0,8).filter(function(r){return r.photos&&r.photos.length}).length;
   openSheet("<h2>Rappel "+(q.i+1)+" sur "+q.items.length+"</h2>"+
-    "<div class='who'><span class='nm'>"+esc(d.name)+"</span><span class='role'>"+esc(d.leader||"Responsable")+" · "+esc(fmtNum(n))+"</span></div>"+
-    "<div class='qmsg'>"+esc(txt)+"</div>"+
-    "<div class='row'>"+(withPh?"<button class='btn wa' id='q-share' type='button' disabled>Préparation des photos…</button>":"")+
-    "<a class='btn"+(withPh?"":" wa")+"' id='q-send' target='_blank' rel='noopener' href='"+esc(waLink(n,txt))+"'>"+(withPh?"Texte seul sur WhatsApp":"Valider et ouvrir WhatsApp")+"</a>"+
+    "<div class='who'><span class='nm'>"+esc(d.name)+"</span><span class='role'>Destinataire : "+esc(d.leader||"Responsable")+" · "+esc(fmtNum(n))+"</span></div>"+
+    "<div class='qmsg' id='q-msg'>"+esc(txt)+"</div>"+
+    "<div class='row'><a class='btn wa' id='q-send' target='_blank' rel='noopener' href='"+esc(waLink(n,txt))+"'>Valider et ouvrir WhatsApp</a>"+
+    (withPh?"<button class='btn' id='q-share' type='button' disabled>Préparation des photos…</button>":"")+
     "<button class='btn' id='q-skip' type='button'>Passer</button><button class='btn' id='q-stop' type='button'>Arrêter</button></div>"+
-    "<p class='hint' id='q-hint' style='margin-top:10px'>"+(withPh?"Chaque action est envoyée avec sa photo et son commentaire.":"WhatsApp s'ouvre avec le message prêt. Appuyez sur Envoyer, puis revenez ici.")+"</p>",function(b){
-      b.querySelector("#q-send").addEventListener("click",function(){markSent(d,it.l.length);q.sent++;q.i++;setTimeout(queueView,500)});
+    "<p class='hint' id='q-hint' style='margin-top:10px'>Le numéro est déjà sélectionné : vérifiez le message, validez, puis appuyez sur Envoyer dans WhatsApp.</p>",function(b){
+      var send=b.querySelector("#q-send"),msgBox=b.querySelector("#q-msg"),hint=b.querySelector("#q-hint");
+      send.addEventListener("click",function(){markSent(d,it.l.length);q.sent++;q.i++;setTimeout(queueView,500)});
       b.querySelector("#q-skip").onclick=function(){q.skipped++;q.i++;queueView()};
       b.querySelector("#q-stop").onclick=function(){st.queue=null;closeSheet();renderRelance()};
+      relanceLink(d).then(function(link){
+        if(!link||st.queue!==q||q.items[q.i]!==it)return;
+        var full=txt+"\n\nVoir les photos et les détails : "+link;
+        msgBox.textContent=full;send.setAttribute("href",waLink(n,full));
+        hint.textContent="Le numéro est déjà sélectionné. Le message contient un lien qui ouvre les actions avec leurs photos, sans connexion. Validez, puis appuyez sur Envoyer dans WhatsApp.";
+      });
       if(!withPh)return;
       var btn=b.querySelector("#q-share"),hint=b.querySelector("#q-hint");
       prepFiles(d,it.l).then(function(files){
@@ -1540,8 +1553,8 @@ function queueView(){
         var canShare=false;try{canShare=!!(navigator.canShare&&navigator.canShare({files:files}))}catch(e){}
         btn.disabled=false;
         if(canShare){
-          btn.textContent="Envoyer avec les photos ("+files.length+")";
-          hint.textContent="Dans la liste qui s'ouvre, choisissez WhatsApp puis "+(d.leader||"le responsable")+". Les photos et le texte sont prêts.";
+          btn.textContent="Joindre les photos ("+files.length+")";
+          btn.title="Dans la liste de partage, choisissez WhatsApp puis "+(d.leader||"le responsable");
           btn.onclick=async function(){
             btn.disabled=true;
             try{
@@ -1554,7 +1567,7 @@ function queueView(){
           };
         }else{
           btn.textContent="Télécharger les photos ("+files.length+")";
-          hint.textContent="Sur ordinateur, WhatsApp ne reçoit pas les images automatiquement : téléchargez-les, ouvrez « Texte seul sur WhatsApp », puis joignez les images dans la conversation.";
+          btn.title="Sur ordinateur, téléchargez les images puis joignez-les dans la conversation WhatsApp";
           btn.onclick=function(){
             files.forEach(function(f,i){setTimeout(function(){
               var u=URL.createObjectURL(f),a=document.createElement("a");a.href=u;a.download=f.name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},4000);
