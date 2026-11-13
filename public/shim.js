@@ -62,8 +62,8 @@
       }
       function form(st) {
         var setup = st.needsSetup;
-        var nameField = setup
-          ? '<div class="f"><label for="g5s-n">Votre nom</label><input id="g5s-n" type="text" autocomplete="name" required></div>'
+        var nameField = (setup || st.hideNames)
+          ? '<div class="f"><label for="g5s-n">' + (setup ? 'Votre nom' : 'Nom') + '</label><input id="g5s-n" type="text" autocomplete="username" autocapitalize="words" required></div>'
           : '<div class="f"><label for="g5s-n">Nom</label><select id="g5s-n" required>' + st.users.map(function (n) { return '<option>' + esc(n) + '</option>'; }).join('') + '</select></div>';
         ov.innerHTML = '<form><h1>' + esc(st.company || 'Gestion 5S') + '</h1>' +
           '<p>' + (setup ? 'Première utilisation : créez le compte administrateur.' : 'Connectez-vous pour voir les alertes et signaler une action.') + '</p>' +
